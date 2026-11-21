@@ -139,14 +139,40 @@ label>input,label>select,label>textarea{margin-top:5px;color:var(--ink)}
 .ppl div{display:flex;justify-content:space-between;align-items:center;background:var(--card);border-radius:12px;padding:6px 6px 6px 14px;min-height:50px}
 .check{display:flex;gap:10px;align-items:center;margin-top:12px;color:var(--ink);font-size:15px}
 .check input{width:24px;min-height:24px;accent-color:var(--garf)}
+/* acceso */
+.authv{min-height:100svh;display:grid;place-items:center;padding:24px 16px}
+.authc{width:min(420px,100%);background:var(--card);border-radius:24px;padding:28px 24px;box-shadow:0 20px 50px -24px #4a0e2380}
+.authc h1{font-size:clamp(32px,8vw,40px);margin:14px 0 6px;color:var(--gar)}
+.authc form{display:grid;gap:12px;margin-top:18px}
+.authc .btn{width:100%}
+.lnk{border:0;background:none;color:var(--gar);font-weight:700;padding:8px 0;min-height:40px;text-decoration:underline;text-underline-offset:3px}
+.err{color:#c0392b;font-size:14px;margin:0}
+.ok{color:var(--green);font-size:14px;margin:0}
+body[data-view=auth] .app,body[data-view=auth] .fab,body[data-view=app] .authv,body[data-view=setup] .app,body[data-view=setup] .fab,body[data-view=setup] .authv{display:none}
+body:not([data-view=setup]) .setupv{display:none}
+.setupv{max-width:720px;margin:0 auto;padding:40px 16px}
+.setupv code{background:var(--soft);border-radius:6px;padding:1px 6px}
+.avatar{width:44px;height:44px;border-radius:50%;border:0;background:var(--garf);color:#fff;font:700 18px Fraunces,serif;display:grid;place-items:center}
+.hbtns{display:flex;gap:8px;align-items:center}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
 </head>
-<body>
-<div class="wrap">
+<body data-view="auth">
+<div class="setupv">
+  <h1 style="font-size:36px;color:var(--gar)">Falta configurar la app</h1>
+  <p>Edita <code>config.js</code> y pon la URL y la clave pública (<em>anon key</em>) de tu proyecto de Supabase. Los pasos están en el <code>README.md</code> del repositorio.</p>
+</div>
+
+<div class="authv">
+  <div class="authc" id="authc"></div>
+</div>
+
+<div class="wrap app">
   <header>
     <div class="hrow">
       <div class="brand"><svg width="22" height="30" viewBox="0 0 24 64" aria-hidden="true"><path d="M9 2h6v14c0 4 6 6 6 12v32a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V28c0-6 6-8 6-12z" fill="currentColor"/><rect x="9" y="2" width="6" height="8" fill="#e0a526"/></svg>Mis vinotecas</div>
-      <div id="who"></div>
+      <div class="hbtns"><span id="who"></span><button class="avatar" id="acct" aria-label="Mi cuenta"></button></div>
     </div>
     <div class="esps" id="esps"></div>
   </header>
@@ -184,42 +210,70 @@ const ESTADOS=[['','Todos'],['listo','Para beber ya'],['guardar','Para guardar']
 const Y=new Date().getFullYear();
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S={me:null,names:{},espacios:[],vinotecas:[],vinos:[],consumos:[],esp:null,vt:null,q:'',ft:'',fe:'',tab:'bod',placing:null,slot:null,ro:false,loaded:false};
-let db=null,user=null,mt;
+const S={me:null,email:'',names:{},espacios:[],miembros:[],vinotecas:[],vinos:[],consumos:[],esp:null,vt:null,q:'',ft:'',fe:'',tab:'bod',placing:null,slot:null,loaded:false};
+let mt,rt,chan=null;
 try{S.esp=localStorage.getItem('vt_esp');S.vt=localStorage.getItem('vt_vt')}catch(e){}
 const remember=()=>{try{localStorage.setItem('vt_esp',S.esp||'');localStorage.setItem('vt_vt',S.vt||'')}catch(e){}};
 const msg=(t,stay)=>{$('msg').textContent=t||'';clearTimeout(mt);if(t&&!stay)mt=setTimeout(()=>{$('msg').textContent=''},5000)};
 const X='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 const bottle=(c,w=22)=>`<svg width="${w}" height="${Math.round(w*64/24)}" viewBox="0 0 24 64" aria-hidden="true"><path d="M9 2h6v14c0 4 6 6 6 12v32a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V28c0-6 6-8 6-12z" fill="${c}"/><path d="M6 30c0-4 3-6 4-8v36H7a1 1 0 0 1-1-1z" fill="#fff" opacity=".22"/><rect x="9" y="2" width="6" height="9" rx="1" fill="#e0a526"/><rect x="5" y="38" width="14" height="13" rx="1.5" fill="#fff" opacity=".9"/></svg>`;
 
-const misEspacios=()=>S.espacios.filter(e=>e.abierto||!S.me||e.creador===S.me||(e.miembros||[]).includes(S.me));
-const esp=()=>misEspacios().find(e=>e.id===S.esp);
+/* ---------- Supabase ---------- */
+const CFG=window.VINOTECA_CONFIG||{};
+const sb=CFG.url&&CFG.anonKey&&window.supabase?window.supabase.createClient(CFG.url,CFG.anonKey):null;
+const uuid=()=>crypto.randomUUID?crypto.randomUUID():'10000000-1000-4000-8000-100000000000'.replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16));
+const camel=o=>{const r={};for(const k in o)r[k.replace(/_([a-z])/g,(_,c)=>c.toUpperCase())]=o[k];return r};
+const snake=o=>{const r={};for(const k in o)r[k.replace(/[A-Z]/g,c=>'_'+c.toLowerCase())]=o[k];return r};
+const ms=x=>x?new Date(x).getTime():0;
+async function q(p){const{data,error}=await p;if(error)throw error;return data}
+const ins=(t,d)=>q(sb.from(t).insert(snake(d)));
+const upd=(t,id,d)=>q(sb.from(t).update(snake(d)).eq('id',id));
+const del=(t,id)=>q(sb.from(t).delete().eq('id',id));
+
+async function loadAll(){
+  const[es,mi,vt,vi,co,pr]=await Promise.all([
+    q(sb.from('espacios').select('*')),q(sb.from('miembros').select('*')),q(sb.from('vinotecas').select('*')),
+    q(sb.from('vinos').select('*')),q(sb.from('consumos').select('*').order('fecha',{ascending:false}).limit(1000)),
+    q(sb.from('profiles').select('id,nombre,email'))]);
+  const t=x=>({...camel(x),creado:ms(x.creado)});
+  S.espacios=es.map(t).sort((a,b)=>a.creado-b.creado);S.miembros=mi.map(camel);S.vinotecas=vt.map(t);
+  S.vinos=vi.map(x=>({...t(x),precio:x.precio==null?null:+x.precio,pos:x.pos||[],puntuaciones:x.puntuaciones||[]}));
+  S.consumos=co.map(x=>({...camel(x),fecha:ms(x.fecha)}));
+  for(const p of pr)S.names[p.id]=p.nombre||p.email;
+  S.loaded=true;render();
+}
+const refresh=()=>{clearTimeout(rt);rt=setTimeout(()=>loadAll().catch(e=>console.error(e)),250)};
+
+/* ---------- modelo ---------- */
+const misEspacios=()=>S.espacios;
+const esp=()=>S.espacios.find(e=>e.id===S.esp);
+const miembrosDe=id=>S.miembros.filter(m=>m.espacioId===id).map(m=>m.userId);
 const vtsDe=id=>S.vinotecas.filter(v=>v.espacioId===id).sort((a,b)=>(a.creado||0)-(b.creado||0));
 const vinosDe=id=>S.vinos.filter(v=>v.espacioId===id);
 const color=t=>(TIPOS[t]||TIPOS.tinto)[1];
 function estado(v){if(!(v.cantidad>0))return'agotado';const d=+v.desde||0,h=+v.hasta||0;if(d&&Y<d)return'guardar';if(h&&Y>h)return'pasado';if(d||h)return'listo';return''}
 const ESTXT={listo:'Para beber ya',guardar:'Para guardar',pasado:'Pasado de su momento',agotado:'Agotado'};
 const nombre=id=>id===S.me?'ti':(S.names[id]||'alguien');
-async function loadNames(ids){if(!user)return;const miss=ids.filter(i=>i&&!(i in S.names));if(!miss.length)return;try{const p=await user.profiles(miss);for(const i of miss)S.names[i]=p?.[i]?.name||'';render()}catch(e){}}
 
 function fixSel(){const es=misEspacios();if(!es.find(e=>e.id===S.esp))S.esp=es[0]?.id||null;const vs=vtsDe(S.esp);if(!vs.find(v=>v.id===S.vt))S.vt=vs[0]?.id||null;remember()}
 
 function render(){
   fixSel();
   const es=misEspacios(),e=esp();
-  $('esps').innerHTML=es.map(x=>`<button class="pill${x.id===S.esp?' on':''}" data-esp="${esc(x.id)}">${esc(x.nombre)}</button>`).join('')+(S.ro||!S.loaded?'':'<button class="pill add" id="newEsp">+ Nuevo espacio</button>');
-  const n=(e?.miembros||[]).length;
-  $('who').innerHTML=e&&!S.ro?`<button class="ibtn" id="share"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14.5c2.4.2 4 1.8 4.5 4.5"/></svg>${n>1?n+' personas':'Compartir'}</button>`:'';
+  $('acct').textContent=(S.names[S.me]||S.email||'?').trim().charAt(0).toUpperCase();
+  $('esps').innerHTML=es.map(x=>`<button class="pill${x.id===S.esp?' on':''}" data-esp="${esc(x.id)}">${esc(x.nombre)}</button>`).join('')+(S.loaded?'<button class="pill add" id="newEsp">+ Nuevo espacio</button>':'');
+  const n=e?miembrosDe(e.id).length:0;
+  $('who').innerHTML=e?`<button class="ibtn" id="share"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14.5c2.4.2 4 1.8 4.5 4.5"/></svg>${n>1?n+' personas':'Compartir'}</button>`:'';
   const vs=vinosDe(S.esp),bot=vs.reduce((a,v)=>a+(+v.cantidad||0),0),ya=vs.filter(v=>estado(v)==='listo').reduce((a,v)=>a+(+v.cantidad||0),0),val=vs.reduce((a,v)=>a+(+v.cantidad||0)*(+v.precio||0),0);
   $('stats').innerHTML=e?`<div class="stat"><b>${bot}</b><span>botellas</span></div><div class="stat go"><b>${ya}</b><span>listas ya</span></div><div class="stat"><b>${val?Math.round(val).toLocaleString('es-ES')+' €':'—'}</b><span>valor</span></div>`:'';
-  $('addWine').style.display=S.esp&&!S.ro?'':'none';
+  $('addWine').style.display=S.esp?'':'none';
   renderVts();renderRack();renderList();
 }
 
 function renderVts(){
   const vs=vtsDe(S.esp),vt=vs.find(v=>v.id===S.vt);
   $('vtTitle').textContent=vt?vt.nombre:(esp()?.nombre||'Mi bodega');
-  $('vts').innerHTML=(vs.length>1?vs.map(v=>`<button class="vtab${v.id===S.vt?' on':''}" data-vt="${esc(v.id)}">${esc(v.nombre)}</button>`).join(''):'')+(S.esp&&!S.ro?`<button class="vtab add" id="newVt">+ Vinoteca</button>`:'')+(S.vt&&!S.ro?'<button class="vtab add" id="editVt">Ajustes</button>':'');
+  $('vts').innerHTML=(vs.length>1?vs.map(v=>`<button class="vtab${v.id===S.vt?' on':''}" data-vt="${esc(v.id)}">${esc(v.nombre)}</button>`).join(''):'')+(S.esp?`<button class="vtab add" id="newVt">+ Vinoteca</button>`:'')+(S.vt?'<button class="vtab add" id="editVt">Ajustes</button>':'');
 }
 
 function renderRack(){
@@ -250,18 +304,17 @@ function renderList(){
   $('tools').style.display=S.tab==='bod'&&S.esp?'':'none';
   $('chips').innerHTML=ESTADOS.map(([k,t])=>`<button class="chip${S.fe===k?' on':''}" data-fe="${k}">${t}</button>`).join('')+Object.entries(TIPOS).map(([k,v])=>`<button class="chip${S.ft===k?' on':''}" data-ft="${k}"><i style="background:${v[1]}"></i>${v[0]}</button>`).join('');
   if(!S.loaded){$('list').innerHTML='<div class="empty">Abriendo la bodega…</div>';return}
-  if(!S.esp){$('list').innerHTML=`<div class="empty">${bottle('#9b1631',30)}<h2>Empieza por un espacio</h2><p>Un espacio es una casa o un lugar. Dentro tendrás tus vinotecas y podrás invitar a otras personas.</p>${S.ro?'':'<button class="btn p" id="newEsp2">Crear mi primer espacio</button>'}</div>`;return}
+  if(!S.esp){$('list').innerHTML=`<div class="empty">${bottle('#9b1631',30)}<h2>Empieza por un espacio</h2><p>Un espacio es una casa o un lugar. Dentro tendrás tus vinotecas y podrás invitar a otras personas.</p><button class="btn p" id="newEsp2">Crear mi primer espacio</button></div>`;return}
   if(S.tab==='beb'){
     const cs=S.consumos.filter(c=>c.espacioId===S.esp).sort((a,b)=>(b.fecha||0)-(a.fecha||0)).slice(0,100);
-    loadNames(cs.map(c=>c.por));
     $('list').innerHTML=cs.length?cs.map(c=>`<div class="wine">${bottle(color(c.tipo))}<div><b>${esc(c.nombre)} ${esc(c.anada||'')}</b><small>${new Date(c.fecha).toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'})}, abierta por ${esc(nombre(c.por))}</small></div><span></span></div>`).join(''):'<div class="empty">Cuando abráis una botella aparecerá aquí, con la fecha y quién la abrió.</div>';return}
-  const q=S.q.toLowerCase().trim();
-  let vs=vinosDe(S.esp).filter(v=>{const st=estado(v);if(S.fe?st!==S.fe:st==='agotado')return false;if(S.ft&&v.tipo!==S.ft)return false;if(!q)return true;return[v.nombre,v.bodega,v.uvas,v.dop,v.region,v.anada].join(' ').toLowerCase().includes(q)});
+  const qq=S.q.toLowerCase().trim();
+  let vs=vinosDe(S.esp).filter(v=>{const st=estado(v);if(S.fe?st!==S.fe:st==='agotado')return false;if(S.ft&&v.tipo!==S.ft)return false;if(!qq)return true;return[v.nombre,v.bodega,v.uvas,v.dop,v.region,v.anada].join(' ').toLowerCase().includes(qq)});
   const o={listo:0,pasado:1,'':2,guardar:3,agotado:4};
   vs.sort((a,b)=>(o[estado(a)]-o[estado(b)])||String(a.nombre).localeCompare(b.nombre));
   const vtn=id=>S.vinotecas.find(v=>v.id===id)?.nombre||'Sin vinoteca';
   $('list').innerHTML=vs.length?vs.map(v=>{const st=estado(v);return`<button class="wine" data-wine="${esc(v.id)}">${bottle(color(v.tipo))}<div><b>${esc(v.nombre)} ${esc(v.anada||'')}</b><small>${esc([v.bodega,v.dop].filter(Boolean).join(', ')||TIPOS[v.tipo]?.[0]||'')}</small><small>${esc(vtn(v.vinotecaId))}${(v.pos||[]).length?', '+esc(v.pos.join(' ')):''}</small>${st?`<span class="st ${st}">${ESTXT[st]}${(v.desde||v.hasta)&&st!=='agotado'?` ${v.desde||'…'}–${v.hasta||'…'}`:''}</span>`:''}</div><div class="qty"><b>${+v.cantidad||0}</b><span>${+v.cantidad===1?'botella':'botellas'}</span></div></button>`}).join('')
-    :`<div class="empty">${vinosDe(S.esp).length?'Ningún vino coincide con la búsqueda.':`${bottle('#9b1631',30)}<h2>La bodega está vacía</h2><p>Añade el primer vino: con el nombre o una foto de la etiqueta, Claude te rellena la ficha.</p>`}</div>`;
+    :`<div class="empty">${vinosDe(S.esp).length?'Ningún vino coincide con la búsqueda.':`${bottle('#9b1631',30)}<h2>La bodega está vacía</h2><p>Añade el primer vino con el botón de abajo.</p>`}</div>`;
 }
 
 /* ---------- hojas ---------- */
@@ -271,90 +324,72 @@ const head=t=>`<div class="sh"><h2>${t}</h2><button class="x" data-x aria-label=
 $('ov').addEventListener('click',e=>{if(e.target.id==='ov')close()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')close()});
 const val=id=>($('card').querySelector('#'+id)?.value||'').trim();
-async function safe(fn){try{await fn()}catch(e){console.error(e);const c=e?.code;msg(c==='quota_exceeded'?'La base de datos está llena. Borra vinos agotados para hacer sitio.':c==='invalid_argument'?'No puedes guardar cambios. Pide al dueño que te comparta la app como Editor.':'No se ha guardado. Vuelve a intentarlo.',true);if(c==='invalid_argument'){S.ro=true;render()}}}
+async function safe(fn){try{await fn()}catch(e){console.error(e);msg(e?.code==='42501'?'No tienes permiso para hacer eso en este espacio.':/fetch|network/i.test(e?.message||'')?'Sin conexión. Vuelve a intentarlo.':'No se ha guardado. Vuelve a intentarlo.',true);refresh()}}
 
 function espModal(){open(`<div class="in">${head('Nuevo espacio')}<p class="note">Una casa, el apartamento de la playa, la bodega del restaurante…</p><div class="grid2" style="margin-top:14px"><label>Nombre<input id="eN" value="Casa"></label><label>Primera vinoteca<input id="eV" value="Vinoteca 1"></label><label>Baldas<input id="eR" type="number" min="1" max="26" value="6"></label><label>Botellas por balda<input id="eC" type="number" min="1" max="20" value="8"></label></div><div class="row" style="margin-top:18px;justify-content:flex-end"><button class="btn" data-x>Cancelar</button><button class="btn p" id="eOk">Crear espacio</button></div></div>`)}
-async function crearEsp(){const n=val('eN')||'Casa';const t=Date.now();const r=db.collection('espacios').doc();await r.set({nombre:n,creador:S.me,miembros:S.me?[S.me]:[],abierto:!S.me,creado:t});await db.collection('vinotecas').doc().set({espacioId:r.id,nombre:val('eV')||'Vinoteca 1',filas:Math.min(26,Math.max(1,+val('eR')||6)),cols:Math.min(20,Math.max(1,+val('eC')||8)),creado:t});S.esp=r.id;S.vt=null;close();msg('Espacio creado.')}
+async function crearEsp(){const id=uuid();await ins('espacios',{id,nombre:val('eN')||'Casa',creador:S.me});await ins('vinotecas',{espacioId:id,nombre:val('eV')||'Vinoteca 1',filas:Math.min(26,Math.max(1,+val('eR')||6)),cols:Math.min(20,Math.max(1,+val('eC')||8))});S.esp=id;S.vt=null;close();await loadAll();msg('Espacio creado.')}
 
 function vtModal(vt){open(`<div class="in">${head(vt?'Ajustes de la vinoteca':'Nueva vinoteca')}<div class="grid3" style="margin-top:12px"><label class="full">Nombre<input id="vN" value="${esc(vt?.nombre||'Vinoteca '+(vtsDe(S.esp).length+1))}"></label><label>Baldas<input id="vR" type="number" min="1" max="26" value="${vt?.filas||6}"></label><label>Botellas por balda<input id="vC" type="number" min="1" max="20" value="${vt?.cols||8}"></label></div><p class="note">Si la haces más pequeña, las botellas que queden fuera pasan a «sin hueco».</p><div class="row" style="margin-top:18px;justify-content:space-between">${vt?'<button class="btn d" id="vDel">Eliminar vinoteca</button>':'<span></span>'}<div class="row"><button class="btn" data-x>Cancelar</button><button class="btn p" id="vOk" data-id="${vt?esc(vt.id):''}">Guardar</button></div></div></div>`)}
 async function guardarVt(id){const d={nombre:val('vN')||'Vinoteca',filas:Math.min(26,Math.max(1,+val('vR')||6)),cols:Math.min(20,Math.max(1,+val('vC')||8))};
-  if(id){await db.collection('vinotecas').doc(id).update(d);for(const v of S.vinos.filter(v=>v.vinotecaId===id)){const keep=(v.pos||[]).filter(p=>p.charCodeAt(0)-65<d.filas&&+p.slice(1)<=d.cols);if(keep.length!==(v.pos||[]).length)await db.collection('vinos').doc(v.id).update({pos:keep})}}
-  else{const r=db.collection('vinotecas').doc();await r.set({...d,espacioId:S.esp,creado:Date.now()});S.vt=r.id}close()}
+  if(id){await upd('vinotecas',id,d);for(const v of S.vinos.filter(v=>v.vinotecaId===id)){const keep=(v.pos||[]).filter(p=>p.charCodeAt(0)-65<d.filas&&+p.slice(1)<=d.cols);if(keep.length!==(v.pos||[]).length)await upd('vinos',v.id,{pos:keep})}}
+  else{const nid=uuid();await ins('vinotecas',{...d,id:nid,espacioId:S.esp});S.vt=nid}close();await loadAll()}
 
-function shareModal(){const e=esp();if(!e)return;loadNames(e.miembros||[]);
-  open(`<div class="in">${head('Compartir '+esc(e.nombre))}<p class="note">Primero comparte esta app desde claude.ai con la persona, como Editor para que pueda añadir vinos. Después búscala aquí y añádela al espacio.</p>
-  <div class="ppl">${(e.miembros||[]).map(id=>`<div><span>${esc(id===S.me?'Tú':S.names[id]||'Alguien')}${id===e.creador?' (creador)':''}</span>${id!==e.creador?`<button class="btn s d" data-rm="${esc(id)}">Quitar</button>`:''}</div>`).join('')}</div>
-  <label>Añadir persona<input id="pq" placeholder="Nombre o correo" autocomplete="off"></label><div class="ppl" id="hits"></div>
-  <label class="check"><input type="checkbox" id="abierto" ${e.abierto?'checked':''}> Visible para todos los que tienen acceso a la app</label>
-  <p class="note">Los espacios ordenan qué ve cada persona, pero no son privados: quien tenga la app como Editor podría llegar a todos los datos.</p>
-  <div class="row" style="margin-top:16px;justify-content:space-between">${e.creador===S.me?'<button class="btn d" id="eDel">Eliminar espacio</button>':'<span></span>'}<div class="row"><button class="btn s" id="eRen">Cambiar nombre</button><button class="btn p" data-x>Hecho</button></div></div></div>`);
-  let t;$('pq').addEventListener('input',ev=>{clearTimeout(t);t=setTimeout(async()=>{if(!user?.search){$('hits').innerHTML='<p class="note">La búsqueda de personas no está disponible aquí.</p>';return}try{const hs=await user.search(ev.target.value);$('hits').innerHTML=(hs||[]).filter(h=>!(e.miembros||[]).includes(h.id)).slice(0,8).map(h=>`<div><span>${esc(h.name||'Sin nombre')}${h.guest?' (invitado)':''}</span><button class="btn s p" data-addp="${esc(h.id)}" data-n="${esc(h.name||'')}">Añadir</button></div>`).join('')||'<p class="note">No aparece nadie. ¿Le has compartido ya la app desde claude.ai?</p>'}catch(x){}},250)});
+function shareModal(){const e=esp();if(!e)return;const ms_=miembrosDe(e.id),soyCreador=e.creador===S.me;
+  open(`<div class="in">${head('Compartir '+esc(e.nombre))}<p class="note">La otra persona tiene que crearse una cuenta en esta app con su correo. Después escribe aquí ese correo para darle acceso a este espacio.</p>
+  <div class="ppl">${ms_.map(id=>`<div><span>${esc(id===S.me?'Tú':S.names[id]||'Alguien')}${id===e.creador?' (creador)':''}</span>${soyCreador&&id!==e.creador?`<button class="btn s d" data-rm="${esc(id)}">Quitar</button>`:''}</div>`).join('')}</div>
+  <form id="addPF" class="row" style="flex-wrap:nowrap"><input id="pq" type="email" placeholder="correo@ejemplo.com" autocomplete="off" aria-label="Correo" required><button class="btn p" type="submit">Añadir</button></form><p id="pqMsg" class="note"></p>
+  <div class="row" style="margin-top:16px;justify-content:space-between">${soyCreador?'<button class="btn d" id="eDel">Eliminar espacio</button>':'<button class="btn d" id="eLeave">Salir del espacio</button>'}<div class="row"><button class="btn s" id="eRen">Cambiar nombre</button><button class="btn p" data-x>Hecho</button></div></div></div>`);
 }
+async function addPersona(){const e=esp(),em=val('pq');if(!em)return;const out=$('pqMsg');out.className='note';out.textContent='Añadiendo…';
+  const{error}=await sb.rpc('add_miembro',{p_espacio:e.id,p_email:em});
+  if(error){out.className='err';out.textContent=/no_user/.test(error.message)?'Nadie se ha registrado con ese correo. Pásale el enlace de la app para que cree su cuenta y vuelve a intentarlo.':'No se ha podido añadir. Vuelve a intentarlo.';return}
+  await loadAll();shareModal();const o2=$('pqMsg');o2.className='ok';o2.textContent='Añadida. Ya ve este espacio.'}
+
+function acctModal(){open(`<div class="in">${head('Mi cuenta')}<p class="note">${esc(S.email)}</p><div class="grid2" style="margin-top:12px"><label class="full">Tu nombre (lo ven quienes comparten espacio contigo)<input id="aN" value="${esc(S.names[S.me]||'')}"></label></div><div class="row" style="margin-top:18px;justify-content:space-between"><button class="btn d" id="logout">Cerrar sesión</button><button class="btn p" id="aOk">Guardar</button></div></div>`)}
 
 function wineForm(v){v=v||{cantidad:1,tipo:'tinto',vinotecaId:S.vt};const vts=vtsDe(S.esp);
   open(`<div class="in">${head(v.id?'Editar vino':'Añadir vino')}
   <div class="grid3" style="margin-top:6px"><label class="full">Nombre del vino<input id="wN" value="${esc(v.nombre)}" placeholder="Viña Ardanza Reserva"></label><label>Añada<input id="wA" inputmode="numeric" value="${esc(v.anada)}" placeholder="2017"></label><label style="grid-column:span 2">Bodega<input id="wB" value="${esc(v.bodega)}"></label></div>
-  <div class="ai"><div class="row"><button class="btn p" id="aiGo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>Rellenar ficha</button><label class="btn" id="photoL" style="color:var(--ink);font-size:16px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto de la etiqueta<input type="file" id="photo" accept="image/*" hidden></label></div><div id="aiOut" class="note" style="margin:0">Claude completa uvas, cata, D.O. y ventana de consumo. Revisa las puntuaciones: salen de memoria y pueden fallar.</div></div>
-  <div class="grid3"><label>Tipo<select id="wT">${Object.entries(TIPOS).map(([k,x])=>`<option value="${k}"${v.tipo===k?' selected':''}>${x[0]}</option>`).join('')}</select></label><label>D.O.<input id="wD" value="${esc(v.dop)}"></label><label>Región<input id="wR" value="${esc(v.region)}"></label>
+  <div class="grid3" style="margin-top:12px"><label>Tipo<select id="wT">${Object.entries(TIPOS).map(([k,x])=>`<option value="${k}"${v.tipo===k?' selected':''}>${x[0]}</option>`).join('')}</select></label><label>D.O.<input id="wD" value="${esc(v.dop)}"></label><label>Región<input id="wR" value="${esc(v.region)}"></label>
   <label class="full">Uvas<input id="wU" value="${esc(v.uvas)}" placeholder="Tempranillo 80%, Garnacha 20%"></label><label>Crianza<input id="wCr" value="${esc(v.crianza)}"></label><label>Alcohol<input id="wAl" value="${esc(v.alcohol)}"></label><label>Precio por botella (€)<input id="wP" inputmode="decimal" value="${esc(v.precio)}"></label>
   <label class="full">Notas de cata<textarea id="wNo">${esc(v.notas)}</textarea></label><label class="full">Maridaje<input id="wM" value="${esc(v.maridaje)}"></label>
   <label class="full">Puntuaciones<input id="wS" value="${esc((v.puntuaciones||[]).map(p=>p.fuente+' '+p.puntos).join('; '))}" placeholder="Peñín 93; Parker 92"></label>
   <label>Beber desde<input id="wF" inputmode="numeric" value="${esc(v.desde)}"></label><label>Beber hasta<input id="wH" inputmode="numeric" value="${esc(v.hasta)}"></label><label>Botellas<input id="wQ" type="number" min="0" value="${esc(v.cantidad)}"></label>
   <label class="full">Vinoteca<select id="wV"><option value="">Sin vinoteca</option>${vts.map(x=>`<option value="${esc(x.id)}"${x.id===v.vinotecaId?' selected':''}>${esc(x.nombre)}</option>`).join('')}</select></label>
   <label class="full">Mi nota<textarea id="wMi" style="min-height:64px" placeholder="Dónde lo compré, quién lo regaló, para qué ocasión…">${esc(v.miNota)}</textarea></label></div>
-  <input type="hidden" id="wConf" value="${esc(v.confianza||'')}">
+  <div class="links" style="margin-top:12px"><a href="#" id="wViv" target="_blank" rel="noopener">Buscar datos en Vivino</a></div>
   <div class="row" style="margin-top:18px;justify-content:flex-end"><button class="btn" data-x>Cancelar</button><button class="btn p" id="wOk" data-id="${esc(v.id||'')}">${v.id?'Guardar cambios':'Añadir y colocar'}</button></div></div>`);
-  if(!S.photo){const l=$('photoL');if(l)l.remove()}
-}
-
-async function preguntarClaude(img){
-  const out=$('aiOut'),sample=await claude.use('sample');
-  if(!sample){out.textContent='La ficha automática no está disponible aquí. Puedes rellenarla a mano.';return}
-  const n=val('wN'),a=val('wA'),b=val('wB');
-  if(!n&&!img){out.textContent='Escribe primero el nombre del vino.';$('wN').focus();return}
-  out.textContent='Consultando a Claude…';$('aiGo').disabled=true;
-  const prompt=`Eres un sumiller experto. ${img?'La imagen adjunta es la etiqueta de un vino: identifícalo.':''} Vino: "${n}"${a?', añada '+a:''}${b?', bodega '+b:''}.
-Responde SOLO con un objeto JSON con estas claves: nombre, bodega, anada (número o null), tipo (uno de: tinto, blanco, rosado, espumoso, dulce, generoso), dop (denominación de origen), region (región y país), uvas (variedades, con % si los conoces), crianza (p. ej. "18 meses en roble francés"), alcohol (p. ej. "14%"), notas (nota de cata en 2-4 frases, en español), maridaje (breve), puntuaciones (lista de {fuente, puntos}, p. ej. Guía Peñín, Robert Parker, James Suckling, Decanter), desde y hasta (años de la ventana de consumo óptima), precio (precio aproximado por botella en euros, número o null), confianza ("alta", "media" o "baja"), aviso (una frase sobre qué datos son inciertos).
-Reglas: no inventes. Si no conoces ese vino en concreto, pon confianza "baja" y rellena solo lo típico de la bodega o la D.O., indicándolo en aviso. Incluye una puntuación solo si la recuerdas con seguridad para esa añada; si no, deja la lista vacía. Si no sabes un dato, pon null.`;
-  try{
-    const r=await sample.json(prompt,{modelTier:'complex',...(img?{images:[img]}:{})});
-    const set=(id,x)=>{if(x!=null&&x!==''){const el=$('card').querySelector('#'+id);if(el)el.value=x}};
-    set('wN',r.nombre);set('wB',r.bodega);set('wA',r.anada);if(TIPOS[r.tipo])set('wT',r.tipo);set('wD',r.dop);set('wR',r.region);set('wU',r.uvas);set('wCr',r.crianza);set('wAl',r.alcohol);set('wNo',r.notas);set('wM',r.maridaje);set('wF',r.desde);set('wH',r.hasta);
-    if(!val('wP'))set('wP',r.precio);
-    set('wS',(r.puntuaciones||[]).filter(p=>p&&p.fuente).map(p=>p.fuente+' '+p.puntos).join('; '));set('wConf',r.confianza);
-    const q=encodeURIComponent((val('wN')+' '+val('wA')).trim());
-    out.innerHTML=`<div class="conf"><b>Confianza ${esc(r.confianza||'sin indicar')}.</b> ${esc(r.aviso||'')}</div><div class="links"><a href="https://www.vivino.com/search/wines?q=${q}" target="_blank" rel="noopener">Comprobar en Vivino</a><a href="https://www.wine-searcher.com/find/${q.replace(/%20/g,'+')}" target="_blank" rel="noopener">Wine-Searcher</a></div>`;
-  }catch(e){out.textContent=e?.code==='rate_limited'?'Demasiadas consultas seguidas. Espera un minuto.':e?.code==='not_granted'?'Esta app no tiene permiso para consultar a Claude.':'No se ha podido rellenar la ficha. Hazlo a mano o vuelve a intentarlo.'}
-  finally{const g=$('aiGo');if(g)g.disabled=false}
 }
 
 async function guardarVino(id){
   const n=val('wN');if(!n){$('wN').focus();msg('Falta el nombre del vino.');return}
-  const old=S.vinos.find(v=>v.id===id)||{};const vt=val('wV')||null;const q=Math.max(0,parseInt(val('wQ'))||0);
-  const pos=old.vinotecaId===vt?(old.pos||[]).slice(0,q):[];
+  const old=S.vinos.find(v=>v.id===id)||{};const vt=val('wV')||null;const qn=Math.max(0,parseInt(val('wQ'))||0);
+  const pos=old.vinotecaId===vt?(old.pos||[]).slice(0,qn):[];
   const pts=val('wS').split(';').map(s=>s.trim()).filter(Boolean).map(s=>{const m=s.match(/^(.*?)\s*([\d.,]+\s*(?:\/\s*\d+)?)$/);return m?{fuente:m[1]||'—',puntos:m[2]}:{fuente:s,puntos:''}});
-  const d={espacioId:S.esp,nombre:n,anada:val('wA'),bodega:val('wB'),tipo:val('wT'),dop:val('wD'),region:val('wR'),uvas:val('wU'),crianza:val('wCr'),alcohol:val('wAl'),precio:parseFloat(val('wP').replace(',','.'))||null,notas:val('wNo'),maridaje:val('wM'),puntuaciones:pts,desde:parseInt(val('wF'))||null,hasta:parseInt(val('wH'))||null,cantidad:q,vinotecaId:vt,pos,miNota:val('wMi'),confianza:val('wConf'),creadoPor:old.creadoPor||S.me,creado:old.creado||Date.now()};
-  const ref=id?db.collection('vinos').doc(id):db.collection('vinos').doc();
-  await ref.set(d);close();
-  if(vt&&pos.length<q&&!id){S.vt=vt;S.placing=ref.id;render();window.scrollTo({top:0,behavior:'smooth'})}else msg(id?'Cambios guardados.':'Vino añadido.')
+  const d={espacioId:S.esp,nombre:n,anada:val('wA'),bodega:val('wB'),tipo:val('wT'),dop:val('wD'),region:val('wR'),uvas:val('wU'),crianza:val('wCr'),alcohol:val('wAl'),precio:parseFloat(val('wP').replace(',','.'))||null,notas:val('wNo'),maridaje:val('wM'),puntuaciones:pts,desde:parseInt(val('wF'))||null,hasta:parseInt(val('wH'))||null,cantidad:qn,vinotecaId:vt,pos,miNota:val('wMi')};
+  const nid=id||uuid();
+  if(id)await upd('vinos',id,d);else await ins('vinos',{...d,id:nid,creadoPor:S.me});
+  close();await loadAll();
+  if(vt&&pos.length<qn&&!id){S.vt=vt;S.placing=nid;render();window.scrollTo({top:0,behavior:'smooth'})}else msg(id?'Cambios guardados.':'Vino añadido.')
 }
 
 function ficha(id,slot){const v=S.vinos.find(x=>x.id===id);if(!v)return;S.slot=slot||null;render();
-  const st=estado(v),q=encodeURIComponent((v.nombre+' '+(v.anada||'')).trim()),lo=Math.min(+v.desde||Y,Y)-2,hi=Math.max(+v.hasta||Y,Y)+2,pc=x=>((x-lo)/(hi-lo)*100).toFixed(1);
-  loadNames([v.creadoPor]);
+  const st=estado(v),qs=encodeURIComponent((v.nombre+' '+(v.anada||'')).trim()),lo=Math.min(+v.desde||Y,Y)-2,hi=Math.max(+v.hasta||Y,Y)+2,pc=x=>((x-lo)/(hi-lo)*100).toFixed(1);
   open(`<div class="hero">${bottle(color(v.tipo),30)}<div><h2>${esc(v.nombre)} ${esc(v.anada||'')}</h2><p>${esc([TIPOS[v.tipo]?.[0],v.bodega,v.dop].filter(Boolean).join(', '))}</p></div><div style="display:grid;gap:12px;justify-items:end"><button class="x" data-x aria-label="Cerrar">${X}</button><div class="qty"><b>${+v.cantidad||0}</b><span>${+v.cantidad===1?'botella':'botellas'}</span></div></div></div>
   <div class="in">
   ${v.desde||v.hasta?`<div><span class="st ${st}" style="margin:0">${ESTXT[st]||''}</span> <span class="note">Mejor entre ${v.desde||'…'} y ${v.hasta||'…'}</span><div class="win" aria-hidden="true"><i style="left:${pc(+v.desde||lo)}%;right:${100-pc(+v.hasta||hi)}%"></i><u style="left:${pc(Y)}%"></u></div></div>`:''}
-  <dl class="facts">${[['Uvas',v.uvas],['Crianza',v.crianza],['Alcohol',v.alcohol],['Región',v.region],['Cata',v.notas],['Maridaje',v.maridaje],['Puntuación',(v.puntuaciones||[]).map(p=>p.fuente+' '+p.puntos).join(', ')],['Precio',v.precio?v.precio+' € por botella':''],['Dónde está',(S.vinotecas.find(x=>x.id===v.vinotecaId)?.nombre||'Sin vinoteca')+((v.pos||[]).length?', huecos '+v.pos.join(' '):'')],['Mi nota',v.miNota],['Añadido por',nombre(v.creadoPor)]].filter(x=>x[1]).map(([a,b])=>`<dt>${a}</dt><dd>${esc(b)}</dd>`).join('')}</dl>
-  ${v.confianza?`<p class="note" style="margin-bottom:8px">Ficha rellenada por Claude con confianza ${esc(v.confianza)}. Compruébala:</p>`:''}<div class="links"><a href="https://www.vivino.com/search/wines?q=${q}" target="_blank" rel="noopener">Vivino</a><a href="https://www.wine-searcher.com/find/${q.replace(/%20/g,'+')}" target="_blank" rel="noopener">Wine-Searcher</a></div>
-  ${S.ro?'':`<div class="row" style="margin-top:20px">${v.cantidad>0?`<button class="btn g" id="drink" data-id="${esc(v.id)}">Abrir ${slot?'la botella '+esc(slot):'una botella'}</button>`:''}${v.vinotecaId&&(v.pos||[]).length<v.cantidad?`<button class="btn" id="place" data-id="${esc(v.id)}">Colocar en la vinoteca</button>`:''}${(v.pos||[]).length?`<button class="btn" id="replace" data-id="${esc(v.id)}">Mover</button>`:''}<button class="btn" id="edit" data-id="${esc(v.id)}">Editar</button><button class="btn d" id="del" data-id="${esc(v.id)}">Eliminar</button></div>`}
+  <dl class="facts">${[['Uvas',v.uvas],['Crianza',v.crianza],['Alcohol',v.alcohol],['Región',v.region],['Cata',v.notas],['Maridaje',v.maridaje],['Puntuación',(v.puntuaciones||[]).map(p=>p.fuente+' '+p.puntos).join(', ')],['Precio',v.precio?v.precio+' € por botella':''],['Dónde está',(S.vinotecas.find(x=>x.id===v.vinotecaId)?.nombre||'Sin vinoteca')+((v.pos||[]).length?', huecos '+v.pos.join(' '):'')],['Mi nota',v.miNota],['Añadido por',v.creadoPor?nombre(v.creadoPor):'']].filter(x=>x[1]).map(([a,b])=>`<dt>${a}</dt><dd>${esc(b)}</dd>`).join('')}</dl>
+  <div class="links"><a href="https://www.vivino.com/search/wines?q=${qs}" target="_blank" rel="noopener">Vivino</a><a href="https://www.wine-searcher.com/find/${qs.replace(/%20/g,'+')}" target="_blank" rel="noopener">Wine-Searcher</a></div>
+  <div class="row" style="margin-top:20px">${v.cantidad>0?`<button class="btn g" id="drink" data-id="${esc(v.id)}">Abrir ${slot?'la botella '+esc(slot):'una botella'}</button>`:''}${v.vinotecaId&&(v.pos||[]).length<v.cantidad?`<button class="btn" id="place" data-id="${esc(v.id)}">Colocar en la vinoteca</button>`:''}${(v.pos||[]).length?`<button class="btn" id="replace" data-id="${esc(v.id)}">Mover</button>`:''}<button class="btn" id="edit" data-id="${esc(v.id)}">Editar</button><button class="btn d" id="del" data-id="${esc(v.id)}">Eliminar</button></div>
   </div>`)}
 
 async function beber(id){const v=S.vinos.find(x=>x.id===id);if(!v||!(v.cantidad>0))return;
   const pos=(v.pos||[]).slice();const i=S.slot&&pos.includes(S.slot)?pos.indexOf(S.slot):pos.length>=v.cantidad?pos.length-1:-1;if(i>=0)pos.splice(i,1);
-  await db.collection('vinos').doc(id).update({cantidad:v.cantidad-1,pos});
-  await db.collection('consumos').doc().set({espacioId:v.espacioId,vinoId:id,nombre:v.nombre,anada:v.anada||'',tipo:v.tipo,fecha:Date.now(),por:S.me});
-  S.slot=null;close();const r=v.cantidad-1;msg(`¡Salud! ${r?`Queda${r===1?'':'n'} ${r} de ${v.nombre}.`:`Era la última de ${v.nombre}.`}`)}
+  const r=v.cantidad-1;v.cantidad=r;v.pos=pos;S.slot=null;close();render();
+  msg(`¡Salud! ${r?`Queda${r===1?'':'n'} ${r} de ${v.nombre}.`:`Era la última de ${v.nombre}.`}`);
+  await upd('vinos',id,{cantidad:r,pos});
+  await ins('consumos',{espacioId:v.espacioId,vinoId:id,nombre:v.nombre,anada:v.anada||'',tipo:v.tipo,por:S.me});
+  refresh()}
 
 async function clickSlot(k){
   const vt=S.vinotecas.find(v=>v.id===S.vt);const owner=S.vinos.find(v=>v.vinotecaId===S.vt&&v.cantidad>0&&(v.pos||[]).includes(k));
@@ -362,13 +397,17 @@ async function clickSlot(k){
     if(owner&&owner.id!==v.id)return ficha(owner.id,k);
     let pos=v.vinotecaId===vt.id?(v.pos||[]).slice():[];
     if(owner)pos=pos.filter(p=>p!==k);else if(pos.length<v.cantidad)pos.push(k);else return msg('Ya están colocadas todas. Toca una de sus botellas para quitarla.');
-    await db.collection('vinos').doc(v.id).update({pos,vinotecaId:vt.id});
-    if(!owner&&pos.length===v.cantidad){S.placing=null;msg('Botellas colocadas.');render()}return}
-  if(owner)ficha(owner.id,k);else if(!S.ro)msg('Hueco '+k+' libre. Añade un vino o abre uno y elige «Colocar en la vinoteca».')
+    v.pos=pos;v.vinotecaId=vt.id;
+    if(!owner&&pos.length===v.cantidad){S.placing=null;msg('Botellas colocadas.')}
+    render();
+    await upd('vinos',v.id,{pos,vinotecaId:vt.id});return}
+  if(owner)ficha(owner.id,k);else msg('Hueco '+k+' libre. Añade un vino o abre uno y elige «Colocar en la vinoteca».')
 }
 
 /* ---------- eventos ---------- */
-document.addEventListener('click',e=>{const t=e.target.closest('button');if(!t)return;
+document.addEventListener('click',e=>{const t=e.target.closest('button,a');if(!t)return;
+  if(t.id==='wViv'){const qs=encodeURIComponent((val('wN')+' '+val('wA')).trim());t.href='https://www.vivino.com/search/wines?q='+qs;return}
+  if(t.tagName==='A')return;
   if(t.hasAttribute('data-x'))return close();
   const d=t.dataset;
   if(d.esp){S.esp=d.esp;S.vt=null;S.placing=null;return render()}
@@ -377,46 +416,86 @@ document.addEventListener('click',e=>{const t=e.target.closest('button');if(!t)r
   if(d.wine)return ficha(d.wine);
   if('fe' in d){S.fe=S.fe===d.fe?'':d.fe;return renderList()}
   if('ft' in d){S.ft=S.ft===d.ft?'':d.ft;return renderList()}
-  if(d.rm){const e2=esp();return safe(async()=>{await db.collection('espacios').doc(e2.id).update({miembros:(e2.miembros||[]).filter(i=>i!==d.rm)});shareModal()})}
-  if(d.addp){const e2=esp();S.names[d.addp]=d.n;return safe(async()=>{await db.collection('espacios').doc(e2.id).update({miembros:[...new Set([...(e2.miembros||[]),d.addp])]});shareModal()})}
+  if(d.rm){const e2=esp();return safe(async()=>{await q(sb.from('miembros').delete().eq('espacio_id',e2.id).eq('user_id',d.rm));await loadAll();shareModal()})}
   const id=t.id,did=d.id;
   if(id==='newEsp'||id==='newEsp2')return espModal();
   if(id==='eOk')return safe(crearEsp);
   if(id==='newVt')return vtModal();
   if(id==='editVt')return vtModal(S.vinotecas.find(v=>v.id===S.vt));
   if(id==='vOk')return safe(()=>guardarVt(did));
-  if(id==='vDel'){if(d.sure){const vid=S.vt;return safe(async()=>{for(const v of S.vinos.filter(v=>v.vinotecaId===vid))await db.collection('vinos').doc(v.id).update({vinotecaId:null,pos:[]});await db.collection('vinotecas').doc(vid).delete();S.vt=null;close()})}d.sure=1;t.textContent='Confirmar: sus vinos quedan sin vinoteca';return}
+  if(id==='vDel'){if(d.sure){const vid=S.vt;return safe(async()=>{await q(sb.from('vinos').update({vinoteca_id:null,pos:[]}).eq('vinoteca_id',vid));await del('vinotecas',vid);S.vt=null;close();await loadAll()})}d.sure=1;t.textContent='Confirmar: sus vinos quedan sin vinoteca';return}
   if(id==='share')return shareModal();
-  if(id==='eRen'){const e2=esp();const inp=$('card').querySelector('#eRenI');if(inp)return safe(async()=>{await db.collection('espacios').doc(e2.id).update({nombre:inp.value.trim()||e2.nombre});close()});t.insertAdjacentHTML('beforebegin',`<input id="eRenI" value="${esc(e2.nombre)}" style="width:12em" aria-label="Nuevo nombre">`);t.textContent='Guardar nombre';return}
-  if(id==='eDel'){if(d.sure){const e2=esp();return safe(async()=>{for(const v of vinosDe(e2.id))await db.collection('vinos').doc(v.id).delete();for(const v of vtsDe(e2.id))await db.collection('vinotecas').doc(v.id).delete();await db.collection('espacios').doc(e2.id).delete();S.esp=null;close()})}d.sure=1;t.textContent='Confirmar: se borra todo';return}
+  if(id==='acct')return acctModal();
+  if(id==='aOk')return safe(async()=>{const n=val('aN');await upd('profiles',S.me,{nombre:n||null});S.names[S.me]=n||S.email;close();render();msg('Nombre guardado.')});
+  if(id==='logout')return safe(async()=>{close();await sb.auth.signOut()});
+  if(id==='eRen'){const e2=esp();const inp=$('card').querySelector('#eRenI');if(inp)return safe(async()=>{await upd('espacios',e2.id,{nombre:inp.value.trim()||e2.nombre});close();await loadAll()});t.insertAdjacentHTML('beforebegin',`<input id="eRenI" value="${esc(e2.nombre)}" style="width:12em" aria-label="Nuevo nombre">`);t.textContent='Guardar nombre';return}
+  if(id==='eDel'){if(d.sure){const e2=esp();return safe(async()=>{await del('espacios',e2.id);S.esp=null;close();await loadAll()})}d.sure=1;t.textContent='Confirmar: se borra todo';return}
+  if(id==='eLeave'){if(d.sure){const e2=esp();return safe(async()=>{await q(sb.from('miembros').delete().eq('espacio_id',e2.id).eq('user_id',S.me));S.esp=null;close();await loadAll()})}d.sure=1;t.textContent='Confirmar: dejarás de verlo';return}
   if(id==='addWine')return wineForm();
-  if(id==='aiGo')return preguntarClaude();
   if(id==='wOk')return safe(()=>guardarVino(did));
   if(id==='drink')return safe(()=>beber(did));
   if(id==='place'||id==='replace'){S.placing=did;S.vt=S.vinos.find(x=>x.id===did).vinotecaId;close();render();window.scrollTo({top:0,behavior:'smooth'});if(id==='replace')msg('Toca sus botellas para quitarlas y luego los huecos nuevos.');return}
   if(id==='donePlace'){S.placing=null;return render()}
   if(id==='edit')return wineForm(S.vinos.find(x=>x.id===did));
-  if(id==='del'){if(d.sure)return safe(async()=>{await db.collection('vinos').doc(did).delete();close();msg('Vino eliminado.')});d.sure=1;t.textContent='Confirmar eliminación';return}
+  if(id==='del'){if(d.sure)return safe(async()=>{await del('vinos',did);close();await loadAll();msg('Vino eliminado.')});d.sure=1;t.textContent='Confirmar eliminación';return}
   if(id==='tBod'||id==='tBeb'){S.tab=id==='tBod'?'bod':'beb';return renderList()}
 });
-document.addEventListener('change',e=>{
-  if(e.target.id==='photo'&&e.target.files[0])preguntarClaude(e.target.files[0]);
-  if(e.target.id==='abierto'){const e2=esp();safe(()=>db.collection('espacios').doc(e2.id).update({abierto:e.target.checked}))}
-});
+document.addEventListener('submit',e=>{if(e.target.id==='addPF'){e.preventDefault();safe(addPersona)}});
 $('q').addEventListener('input',e=>{S.q=e.target.value;renderList()});
 
+/* ---------- acceso ---------- */
+const here=()=>location.origin+location.pathname;
+function authView(mode,note){
+  document.body.dataset.view='auth';
+  const T={in:['Entra en tu bodega','Entrar'],up:['Crea tu cuenta','Crear cuenta'],reset:['Recupera tu contraseña','Enviarme un enlace'],newpass:['Nueva contraseña','Guardar contraseña']}[mode];
+  $('authc').innerHTML=`${bottle('#9b1631',30)}<h1>${T[0]}</h1>
+  <form id="authF" data-mode="${mode}">
+  ${mode==='up'?'<label>Tu nombre<input id="uN" autocomplete="name" required></label>':''}
+  ${mode!=='newpass'?'<label>Correo<input id="uE" type="email" autocomplete="email" required></label>':''}
+  ${mode!=='reset'?`<label>Contraseña<input id="uP" type="password" minlength="6" autocomplete="${mode==='in'?'current-password':'new-password'}" required></label>`:''}
+  <p id="uMsg" class="${note?'ok':'err'}" role="status">${esc(note||'')}</p>
+  <button class="btn p" type="submit">${T[1]}</button></form>
+  <div class="row" style="justify-content:space-between;margin-top:10px">${mode==='in'?'<button class="lnk" data-auth="up">Crear cuenta</button><button class="lnk" data-auth="reset">He olvidado la contraseña</button>':mode==='newpass'?'':'<button class="lnk" data-auth="in">Ya tengo cuenta</button>'}</div>`;
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-auth]');if(b)authView(b.dataset.auth)});
+document.addEventListener('submit',async e=>{if(e.target.id!=='authF')return;e.preventDefault();
+  const f=e.target,mode=f.dataset.mode,out=$('uMsg'),btn=f.querySelector('button[type=submit]'),v=id=>($(id)?.value||'').trim();
+  out.className='err';out.textContent='';btn.disabled=true;
+  try{let r;
+    if(mode==='in')r=await sb.auth.signInWithPassword({email:v('uE'),password:$('uP').value});
+    else if(mode==='up'){r=await sb.auth.signUp({email:v('uE'),password:$('uP').value,options:{data:{nombre:v('uN')},emailRedirectTo:here()}});if(!r.error&&!r.data.session)return authView('in','Te hemos enviado un correo. Ábrelo para confirmar la cuenta y luego entra.')}
+    else if(mode==='reset'){r=await sb.auth.resetPasswordForEmail(v('uE'),{redirectTo:here()});if(!r.error)return authView('in','Si ese correo tiene cuenta, te llegará un enlace para cambiar la contraseña.')}
+    else{r=await sb.auth.updateUser({password:$('uP').value});if(!r.error){msg('Contraseña cambiada.');return enter(r.data.user)}}
+    if(r.error)out.textContent=/Invalid login/i.test(r.error.message)?'Correo o contraseña incorrectos.':/not confirmed/i.test(r.error.message)?'Aún no has confirmado el correo. Busca el mensaje de confirmación.':/already registered/i.test(r.error.message)?'Ese correo ya tiene cuenta. Entra o recupera la contraseña.':/at least/i.test(r.error.message)?'La contraseña debe tener al menos 6 caracteres.':r.error.message;
+  }catch(x){out.textContent='Sin conexión. Vuelve a intentarlo.'}finally{btn.disabled=false}
+});
+
+async function enter(user){
+  if(!user)return;
+  document.body.dataset.view='app';
+  if(S.me===user.id&&S.loaded)return;
+  S.me=user.id;S.email=user.email||'';S.loaded=false;render();
+  try{await loadAll()}catch(e){console.error(e);msg('No se ha podido cargar la bodega. Comprueba la conexión.',true)}
+  if(chan)sb.removeChannel(chan);
+  chan=sb.channel('bodega').on('postgres_changes',{event:'*',schema:'public'},refresh).subscribe();
+}
+function leave(){
+  if(chan){sb.removeChannel(chan);chan=null}
+  Object.assign(S,{me:null,email:'',names:{},espacios:[],miembros:[],vinotecas:[],vinos:[],consumos:[],placing:null,loaded:false});
+  authView('in');
+}
+
 /* ---------- arranque ---------- */
-render();
-(async()=>{
-  db=await window.claude?.use?.('db');user=await window.claude?.use?.('user');
-  if(!db){S.loaded=true;S.ro=true;msg('Abre esta app con tu sesión de Claude iniciada para guardar tu bodega.',true);return render()}
-  try{S.me=await user?.id()||null}catch(e){}
-  try{if(await user?.can?.('data.write')===false){S.ro=true;msg('Solo lectura: pide al dueño que te comparta la app como Editor.',true)}}catch(e){}
-  try{S.photo=!!(await (await claude.use('sample'))?.limits?.())?.images}catch(e){}
-  const timer=setTimeout(()=>{if(!S.loaded)msg('La bodega tarda en cargar. Comprueba la conexión.',true)},10000);
-  const pend=new Set(['espacios','vinotecas','vinos','consumos']);
-  for(const c of [...pend]){db.collection(c).onSnapshot(s=>{S[c]=s.docs.map(d=>({id:d.id,...d.data()}));if(!s.metadata.fromCache)pend.delete(c);if(!pend.size&&!S.loaded){S.loaded=true;clearTimeout(timer);if(!S.ro)msg('')}render()},()=>{clearTimeout(timer);S.loaded=true;msg('No se ha podido cargar la bodega.',true);render()})}
-})();
+if(!sb){document.body.dataset.view='setup'}
+else{
+  let recovering=false;
+  sb.auth.onAuthStateChange((ev,s)=>{setTimeout(()=>{
+    if(ev==='PASSWORD_RECOVERY'){recovering=true;return authView('newpass')}
+    if(recovering)return;
+    if(s?.user)enter(s.user);else leave();
+  },0)});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&S.me)refresh()});
+}
 }
 </script>
 </body>
